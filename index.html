@@ -684,6 +684,11 @@ const MICRO = {
   MICRO[n] = a.slice(4).concat(v==='1' ? [1] : []);
 });
 FOODS.forEach(f=>{ const m = MICRO[f.n]; if(m){ f.m = m.slice(0,10); f.vary = m[10]===1; } });
+// 飲み物は ml で量を指定できるようにする。f.ml＝上の数値が何ml分か、f.mlServe＝追加するときの初期値
+FOODS.forEach(f=>{ const mm = f.n.match(/(\d+)\s*ml/i); if(mm){ f.ml = +mm[1]; f.mlServe = f.ml; } });
+{ const cc = FOODS.find(f=>f.n==='缶コーヒー 加糖'); if(cc){ cc.ml = 185; cc.mlServe = 185; } }
+const ML_CHIPS = [100, 200, 350, 500];
+const mlServe = f => f.mlServe || f.ml;
 
 const SLOTS = ['朝','昼','夕','間食'];
 
@@ -1156,7 +1161,8 @@ E.nutri = (date)=>{
     if(v.ca==null) unkItems.push(m.name);
   });
   const unk = {}; NUT_K.forEach(k=> unk[k] = tot.k>0 ? unkK[k]/tot.k : 0);
-  const main = ['朝','昼','夕'].filter(s=>meals.some(m=>m.slot===s));
+  const skip = (d && d.skip) || {};
+  const main = ['朝','昼','夕'].filter(s=>meals.some(m=>m.slot===s) || skip[s]);   // 「なし」にした食事も記録済みとして数える
   return {tot, unk, unkItems:[...new Set(unkItems)], n:meals.length, main, partial: main.length<3};
 };
 // 達成度 s(0..1) と状態 ok/low/over/na
@@ -2414,7 +2420,13 @@ const MF_ROWS = [
   {id:'mf_s', l:'食塩相当量', u:'g'},
 ];
 const MF_EXTRA = ['ca','fe','a','e','b1','b2','vc'];
-let FOOD_QTY = 1;          // 検索から追加するときの量（×0.5〜×2）
+let FOOD_QTY = 1;
+let MF_BASIS = 'serve';    // マイ食品の表示単位：serve＝1食・1本あたり／100ml＝100mlあたり
+function setMfBasis(b){
+  MF_BASIS = b;
+  $$('[data-mfbasis]').forEach(x=>x.classList.toggle('on', x.dataset.mfbasis===b));
+  const hd = $('#mfHead'); if(hd) hd.textContent = b==='100ml' ? '栄養成分表示（100mlあたり）' : '栄養成分表示（1食あたり）';
+}          // 検索から追加するときの量（×0.5〜×2）
 const FOOD_QTYS = [0.5, 1, 1.5, 2];
 let SLOT = (()=>{ const h=new Date().getHours(); return h<10?'朝':h<15?'昼':h<20?'夕':'間食'; })();
 
@@ -2422,7 +2434,7 @@ function renderFoodResults(){
   if(!FOOD_Q.trim()) return '';
   const res = E.foodSearch(FOOD_Q);
   if(!res.length) return `<div class="empty" style="padding:16px 10px">該当する食品がありません。<br>「＋ 自分の食品を登録」から登録すると次回から検索できます。</div>`;
-  return res.map(f=>`<div class="mi" style="padding:8px 0">
+  return res.map(f=> f.ml ? drinkResult(f) : `<div class="mi" style="padding:8px 0">
     <div class="bd">
       <b style="font-size:13.5px">${esc(f.n)}${f.my?' <span style="color:var(--accent2);font-size:10px">マイ食品</span>':''}${f.vary?'<span class="fbadge">目安</span>':''}</b>
       <div class="why">${Math.round(f.k*FOOD_QTY)}kcal ・ たんぱく質${r1(f.p*FOOD_QTY)}g 脂質${r1(f.f*FOOD_QTY)}g 炭水化物${r1(f.c*FOOD_QTY)}g${(()=>{ const m=E.microOf(f); return m?` ・ 塩分${r1(m[2]*FOOD_QTY)}g`:' ・ ビタミン等の内訳なし'; })()}</div>
@@ -2431,13 +2443,33 @@ function renderFoodResults(){
   </div>`).join('');
 }
 
-function addFood(name, qty){
+// 飲み物の検索結果：量を ml で入れて追加する（栄養は ml に比例して計算）
+function drinkResult(f){
+  const ml = mlServe(f), q = ml / f.ml;
+  return `<div class="mi" style="padding:8px 0;flex-wrap:wrap">
+    <div class="bd" style="min-width:100%">
+      <b style="font-size:13.5px">${esc(f.n)}${f.my?' <span style="color:var(--accent2);font-size:10px">マイ食品</span>':''}${f.vary?'<span class="fbadge">目安</span>':''}</b>
+      <div class="why">${f.ml}mlあたり ${f.k}kcal ・ たんぱく質${r1(f.p)}g 脂質${r1(f.f)}g 炭水化物${r1(f.c)}g</div>
+    </div>
+    <div class="row" style="gap:6px;width:100%;margin-top:4px;flex-wrap:wrap">
+      ${ML_CHIPS.map(v=>`<div class="chip" data-mlset="${v}" style="padding:5px 10px">${v}</div>`).join('')}
+      <span style="display:inline-flex;align-items:center;gap:4px"><input type="number" inputmode="numeric" step="10" data-mlin value="${ml}" style="width:78px;padding:6px 8px;text-align:right;border:1px solid var(--line);border-radius:8px;font-size:16px;background:var(--bg2);color:var(--txt)"><span style="font-size:12px;color:var(--dim)">ml</span></span>
+      <button class="btn sm" data-food="${esc(f.n)}" style="margin-left:auto">＋ ${SLOT}に追加</button>
+    </div>
+  </div>`;
+}
+
+function addFood(name, qty, ml){
   const f = E.allFoods().find(x=>x.n===name);
   if(!f) return false;
   const d = day(VIEW_DATE, true);
   const m = E.microOf(f);
+  if(f.ml && !ml) ml = Math.round(mlServe(f) * (qty||1));
+  const isMl = f.ml && ml > 0;
   d.meals.push(Object.assign({id:'m'+Date.now()+'_'+Math.round(Math.random()*9999), slot:SLOT, name:f.n,
-                q: qty||1, k:f.k, p:f.p, f:f.f, c:f.c}, m ? {m: m.slice()} : {}));
+                q: isMl ? ml/f.ml : (qty||1), k:f.k, p:f.p, f:f.f, c:f.c},
+                m ? {m: m.slice()} : {}, isMl ? {ml, mlBase:f.ml} : {}));
+  if(d.skip) delete d.skip[SLOT];          // 「なし」にしていた食事に追加したら解除
   afterMealChange(d);
   return true;
 }
@@ -2586,9 +2618,10 @@ function parseLabel(text){
   const lines = z2h(String(text||'')).split(/\r?\n/).map(l=>l.replace(/^[\s*・\-•●◆■]+/,'').trim()).filter(Boolean);
   const labelOf = l => { for(const [id,re] of LABEL_PAT) if(re.test(l)) return id; return null; };
   const got = {}, unsure = [], empty = [];
-  let per100 = false;
+  let per100 = false, volMl = null;
   lines.forEach((l,i)=>{
-    if(/100\s*(g|ml)\s*(当た|あた)り/i.test(l)) per100 = true;
+    const pm = l.match(/100\s*(g|ml)\s*(当た|あた)り/i); if(pm) per100 = pm[1].toLowerCase()==='ml' ? 'ml' : 'g';
+    const vm = l.match(/内容量[^\d]*(\d+(?:\.\d+)?)\s*(ml|mL|ML|l|L|リットル)/); if(vm) volMl = /^(l|リットル)$/i.test(vm[2]) ? Math.round(+vm[1]*1000) : +vm[1];
     const id = labelOf(l); if(!id || got[id]!=null) return;
     let rest = l.replace(LABEL_PAT.find(x=>x[0]===id)[1], '');
     if(!/\d/.test(rest) && lines[i+1] && !labelOf(lines[i+1])) rest = lines[i+1];
@@ -2608,7 +2641,7 @@ function parseLabel(text){
   let naNote = '';
   if(got.mf_s==null && got.na!=null){ got.mf_s = Math.round(got.na*2.54/100)/10; naNote = `食塩相当量はナトリウム ${got.na}mg から換算しました（×2.54）。`; }
   delete got.na;
-  return {got, unsure, empty, per100, naNote};
+  return {got, unsure, empty, per100, naNote, volMl};
 }
 
 /* 栄養バランス（14項目）— 塩梅 ANBAI を統合 */
@@ -2659,6 +2692,14 @@ function renderFood(){
       <b style="font-size:15px">${jpDate(date)} の食事</b>
       <span style="font-size:11.5px;color:var(--dim)">目標 ${t.kcal}kcal ・ たんぱく質${t.protein}g 脂質${t.fat}g 炭水化物${t.carb}g</span>
     </div>
+    <div class="chips" style="margin-top:9px">
+      ${SLOTS.map(sl=>{
+        const has = (d.meals||[]).some(m=>m.slot===sl), sk = d.skip && d.skip[sl];
+        return has ? `<div class="chip on" style="cursor:default">${sl} ✓</div>`
+          : `<div class="chip ${sk?'on':''}" data-skipslot="${sl}" style="${sk?'background:var(--dim);border-color:var(--dim)':''}">${sl} ${sk?'なし':'未記録'}</div>`;
+      }).join('')}
+    </div>
+    <div class="hint">食べなかった食事は「未記録」をタップして「なし」に。その日の栄養の評価が、残りの食事を待たずに確定します。</div>
   </div>`;
 
   /* 検索して追加（常に開いた状態） */
@@ -2683,8 +2724,15 @@ function renderFood(){
         <textarea id="mfPaste" rows="4" placeholder="例）&#10;熱量 572kcal&#10;たんぱく質 23.2g&#10;脂質 17.7g&#10;炭水化物 82.8g&#10;食塩相当量 2.1g" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:var(--bg2);color:var(--txt);font-size:15px"></textarea></div>
       <button class="btn ghost sm" id="mfParse">貼り付けた内容を読み取る</button>
       <div id="mfMsg" class="hint"></div>
+      <div class="field" style="margin:12px 0 0"><label>表示の単位</label>
+        <div class="chips">
+          <div class="chip on" data-mfbasis="serve">1食・1本あたり</div>
+          <div class="chip" data-mfbasis="100ml">100mlあたり（飲み物）</div>
+        </div></div>
+      <div class="field" style="margin:8px 0 0" id="mfMlWrap"><label>飲み物なら 1本・1杯の量（任意）</label>
+        <div class="unit" style="max-width:180px"><input type="number" inputmode="numeric" step="10" id="mfMl" placeholder="例 500"><span>ml</span></div></div>
       <div class="lbl-box">
-        <div class="lbl-head">栄養成分表示（1食あたり）</div>
+        <div class="lbl-head" id="mfHead">栄養成分表示（1食あたり）</div>
         ${MF_ROWS.map(r=>`<label class="lbl-row ${r.sub?'sub':''}"><span>${r.sub?'　':''}${r.l}</span>
           <span class="lbl-in"><input type="number" step="any" inputmode="decimal" id="${r.id}" placeholder="${r.req?'':'不明'}"><em>${r.u}</em></span></label>`).join('')}
       </div>
@@ -2699,7 +2747,7 @@ function renderFood(){
   const freq = E.freqFoods(date);
   if(freq.length && !FOOD_Q){
     h += `<div class="sec-title" style="margin:14px 0 7px">よく食べるもの</div>
-      <div class="chips">${freq.map(f=>`<div class="chip" data-quick="${esc(f.n)}">${esc(f.n)}</div>`).join('')}</div>`;
+      <div class="chips">${freq.map(f=>`<div class="chip" data-quick="${esc(f.n)}">${esc(f.n)}${f.ml && mlServe(f)!==f.ml ? ` ${mlServe(f)}ml` : ''}</div>`).join('')}</div>`;
   }
   h += `</div>`;
 
@@ -2714,7 +2762,7 @@ function renderFood(){
         <div style="font-size:11px;color:var(--dim);letter-spacing:.1em;margin:8px 0 2px">${s} — ${st.kcal}kcal（たんぱく質${st.protein}g 脂質${st.fat}g 炭水化物${st.carb}g）</div>
         ${list.map(m=>`<div class="mi" style="padding:7px 0">
           <div class="bd">
-            <b style="font-size:13.5px">${esc(m.name)}${m.q!==1?` <span style="color:var(--accent)">×${m.q}</span>`:''}</b>
+            <b style="font-size:13.5px">${esc(m.ml ? m.name.replace(/\s*[（(]\d+\s*ml[)）]/i,'') : m.name)}${m.ml ? ` <span style="color:var(--accent)">${m.ml}ml</span>` : m.q!==1?` <span style="color:var(--accent)">×${m.q}</span>`:''}</b>
             <div class="why">${Math.round(m.k*m.q)}kcal ・ たんぱく質${r1(m.p*m.q)}g 脂質${r1(m.f*m.q)}g 炭水化物${r1(m.c*m.q)}g</div>
           </div>
           <div class="row" style="gap:5px;flex-wrap:nowrap">
@@ -3464,13 +3512,30 @@ function bind(){
 
   /* ---- クリック ---- */
   document.addEventListener('click', e=>{
-    const el = e.target.closest('[data-shift],[data-off],[data-min],[data-food],[data-quick],[data-slot],[data-fq],[data-nsugg],[data-mq],[data-mdel],[data-deltmpl],[data-delfood],[data-fill],[data-loadmin],[data-tmin],[data-outdoor],[data-hint],[data-sect],[data-photo],[data-delphoto],[data-check],[data-rep],[data-alldone],[data-scale] button,[data-addset],[data-delset],[data-delex],[data-editw],[data-delw],button');
+    const el = e.target.closest('[data-shift],[data-off],[data-min],[data-food],[data-quick],[data-slot],[data-fq],[data-mlset],[data-skipslot],[data-mfbasis],[data-nsugg],[data-mq],[data-mdel],[data-deltmpl],[data-delfood],[data-fill],[data-loadmin],[data-tmin],[data-outdoor],[data-hint],[data-sect],[data-photo],[data-delphoto],[data-check],[data-rep],[data-alldone],[data-scale] button,[data-addset],[data-delset],[data-delex],[data-editw],[data-delw],button');
     if(!el) return;
 
     /* ---- 食事 ---- */
     if(el.dataset.slot){ SLOT = el.dataset.slot; render(true); return; }
     if(el.dataset.fq){ FOOD_QTY = +el.dataset.fq; render(true); return; }
+    if(el.dataset.mfbasis){ setMfBasis(el.dataset.mfbasis); return; }
+    if(el.dataset.skipslot){
+      const d = day(VIEW_DATE, true), sl = el.dataset.skipslot;
+      d.skip = d.skip || {};
+      if(d.skip[sl]) delete d.skip[sl]; else d.skip[sl] = true;
+      save(); render(true); return;
+    }
+    if(el.dataset.mlset){
+      const inp = el.closest('.mi').querySelector('[data-mlin]'); if(inp) inp.value = el.dataset.mlset; return;
+    }
     if(el.dataset.food){
+      const inp = el.closest('.mi') && el.closest('.mi').querySelector('[data-mlin]');
+      if(inp){
+        const ml = num(inp.value);
+        if(!(ml > 0)){ toast('量（ml）を入れてください'); return; }
+        if(addFood(el.dataset.food, 1, ml)) { render(true); toast(`${SLOT}に ${ml}ml 追加しました`); }
+        return;
+      }
       if(addFood(el.dataset.food, FOOD_QTY)) { const q = FOOD_QTY; FOOD_QTY = 1; render(true); toast(`${SLOT}に${q!==1?'×'+q+'で':''}追加しました`); }
       return;
     }
@@ -3487,7 +3552,10 @@ function bind(){
       const [id, op] = el.dataset.mq.split('|');
       const d = day(VIEW_DATE, true);
       const m = d.meals.find(x=>x.id===id);
-      if(m){
+      if(m && m.ml){               // 飲み物は 50ml ずつ
+        m.ml = clamp(m.ml + (op==='+'?50:-50), 50, 5000); m.q = m.ml / m.mlBase;
+        afterMealChange(d); render(true);
+      }else if(m){
         m.q = Math.round(clamp(m.q + (op==='+'?0.5:-0.5), 0.5, 20)*10)/10;
         afterMealChange(d); render(true);
       }
@@ -3649,7 +3717,7 @@ function bind(){
         break;
       }
       case 'actRefresh': render(true); toast('食事の目標と脚の疲れの判定に反映しました'); break;
-      case 'myFoodToggle': MYFOOD_OPEN = !MYFOOD_OPEN; render(true); break;
+      case 'myFoodToggle': MYFOOD_OPEN = !MYFOOD_OPEN; MF_BASIS = 'serve'; render(true); break;
       case 'copySlot': {
         for(let i=1;i<=14;i++){
           const prev = S.days[addDays(VIEW_DATE,-i)];
@@ -3664,6 +3732,8 @@ function bind(){
       }
       case 'mfParse': {
         const r = parseLabel($('#mfPaste').value);
+        if(r.per100 === 'ml') setMfBasis('100ml');
+        if(r.volMl) $('#mfMl').value = r.volMl;
         const ids = Object.keys(r.got);
         if(!ids.length && !r.unsure.length){ $('#mfMsg').textContent = '項目名（熱量・たんぱく質・脂質など）が見つかりませんでした。'; return; }
         ids.forEach(id=>{ const el2 = $('#'+id); if(el2) el2.value = r.got[id]; });
@@ -3673,7 +3743,9 @@ function bind(){
         if(r.naNote) msg.push(r.naNote);
         if(r.empty.length) msg.push(`値が書かれていない項目：${r.empty.join('・')}（空欄＝不明のままにしています）`);
         if(r.unsure.length) msg.push(`要確認（入れていません）：${r.unsure.join('・')}。表示を見て手で入れてください`);
-        if(r.per100) msg.push('⚠ 「100gあたり」の表示のようです。1食の量と違う場合は、食べた量に合わせて追加時の量（×0.5など）で調整してください');
+        if(r.per100==='ml') msg.push('「100mlあたり」の表示なので、単位を「100mlあたり」にしました。追加するときに飲んだ量（ml）を入れれば計算されます。');
+        else if(r.per100) msg.push('⚠ 「100gあたり」の表示のようです。1食の量と違う場合は、食べた量に合わせて追加時の量（×0.5など）で調整してください');
+        if(r.volMl) msg.push(`内容量 ${r.volMl}ml を「1本の量」に入れました。`);
         msg.push('下の欄で数値を確かめてから「この内容で登録」を押してください。');
         $('#mfMsg').innerHTML = msg.map(esc).join('<br>');
         $('#mfMsg').style.color = (r.unsure.length||r.per100||r.empty.length) ? 'var(--warn)' : 'var(--sub)';
@@ -3691,7 +3763,10 @@ function bind(){
           else { cc = sugar; toast('食物繊維が分からないので、糖質の値を炭水化物として登録しました'); }
         }
         const mm = MICRO_K.map(x=>{ const el2 = $('#mf_'+x); return el2 ? num(el2.value) : null; });
-        S.myFoods.unshift(Object.assign({n, k, p:pp||0, f:ff||0, c:cc||0, g:'マイ食品', r:kana(n), my:1},
+        const mlv = num($('#mfMl').value), per100ml = MF_BASIS==='100ml';
+        if(per100ml && !(mlv>0)) toast('100mlあたりで登録しました。追加するときに飲んだ量を入れてください');
+        const mlInfo = per100ml ? {ml:100, mlServe: mlv>0 ? mlv : 100} : (mlv>0 ? {ml:mlv, mlServe:mlv} : {});
+        S.myFoods.unshift(Object.assign({n, k, p:pp||0, f:ff||0, c:cc||0, g:'マイ食品', r:kana(n), my:1}, mlInfo,
           mm.some(v=>v!=null) ? {m:mm} : {}));
         save(); MYFOOD_OPEN = false; FOOD_Q = n; render(true); toast('登録しました');
         break;
