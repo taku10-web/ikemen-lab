@@ -55,6 +55,16 @@ input,select,textarea{font-family:inherit;font-size:16px}
 .nsugg button>span{flex:1;font-size:13.5px}
 .nsugg small{display:block;color:var(--dim);font-size:11px}
 .fbadge{font-size:10px;border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:0 5px;margin-left:5px;font-weight:400;vertical-align:1px}
+/* ---------- マイ食品：栄養成分表示ふうの入力欄 ---------- */
+.lbl-box{border:1.5px solid var(--txt);border-radius:6px;background:var(--bg2);padding:2px 10px;margin-top:10px}
+.lbl-head{font-size:13px;font-weight:700;padding:7px 0;border-bottom:1.5px solid var(--txt)}
+.lbl-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:14px}
+.lbl-row:last-child{border-bottom:0}
+.lbl-row>span:first-child{flex:1}
+.lbl-row.sub>span:first-child{color:var(--sub);font-size:13px}
+.lbl-in{display:flex;align-items:center;gap:5px;width:132px}
+.lbl-in input{width:100%;text-align:right;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:16px;background:var(--card)}
+.lbl-in em{font-style:normal;font-size:12px;color:var(--dim);width:30px}
 .hidden{display:none !important}
 
 /* ---------- layout ---------- */
@@ -2505,6 +2515,18 @@ function sect(key, title, tag, body, defOpen){
 
 let FOOD_Q = '';
 let MYFOOD_OPEN = false;
+/* マイ食品の入力欄：パッケージの栄養成分表示と同じ並び・同じ呼び方にする */
+const MF_ROWS = [
+  {id:'mfK',  l:'熱量（エネルギー）', u:'kcal', req:true},
+  {id:'mfP',  l:'たんぱく質', u:'g'},
+  {id:'mfF',  l:'脂質', u:'g'},
+  {id:'mf_sf',l:'飽和脂肪酸', u:'g', sub:true},
+  {id:'mfC',  l:'炭水化物', u:'g'},
+  {id:'mfSugar', l:'糖質', u:'g', sub:true},
+  {id:'mf_fb',l:'食物繊維', u:'g', sub:true},
+  {id:'mf_s', l:'食塩相当量', u:'g'},
+];
+const MF_EXTRA = ['ca','fe','a','e','b1','b2','vc'];
 let FOOD_QTY = 1;          // 検索から追加するときの量（×0.5〜×2）
 const FOOD_QTYS = [0.5, 1, 1.5, 2];
 let SLOT = (()=>{ const h=new Date().getHours(); return h<10?'朝':h<15?'昼':h<20?'夕':'間食'; })();
@@ -2516,7 +2538,7 @@ function renderFoodResults(){
   return res.map(f=>`<div class="mi" style="padding:8px 0">
     <div class="bd">
       <b style="font-size:13.5px">${esc(f.n)}${f.my?' <span style="color:var(--accent2);font-size:10px">マイ食品</span>':''}${f.vary?'<span class="fbadge">目安</span>':''}</b>
-      <div class="why">${Math.round(f.k*FOOD_QTY)}kcal ・ P${r1(f.p*FOOD_QTY)} F${r1(f.f*FOOD_QTY)} C${r1(f.c*FOOD_QTY)}${(()=>{ const m=E.microOf(f); return m?` ・ 塩分${r1(m[2]*FOOD_QTY)}g`:' ・ ビタミン等の内訳なし'; })()}</div>
+      <div class="why">${Math.round(f.k*FOOD_QTY)}kcal ・ たんぱく質${r1(f.p*FOOD_QTY)}g 脂質${r1(f.f*FOOD_QTY)}g 炭水化物${r1(f.c*FOOD_QTY)}g${(()=>{ const m=E.microOf(f); return m?` ・ 塩分${r1(m[2]*FOOD_QTY)}g`:' ・ ビタミン等の内訳なし'; })()}</div>
     </div>
     <button class="btn sm" data-food="${esc(f.n)}">＋ ${SLOT}に${FOOD_QTY!==1?'×'+FOOD_QTY+'で':''}追加</button>
   </div>`).join('');
@@ -2650,6 +2672,58 @@ function renderActivityHint(date, t){
     歩数・トレーニングを記録すると、その場で目標が更新されます。</div>`;
 }
 
+/* 栄養成分表示の貼り付けを読み取る
+   1行ずつ見て、項目名と同じ行（なければ次の行）の数値を拾う。範囲や「未満」など迷う値は入れずに要確認として返す */
+const LABEL_PAT = [
+  ['mfK',   /熱量|エネルギー/],
+  ['mfP',   /たんぱく質|タンパク質|蛋白質|たん白質/],
+  ['mf_sf', /飽和脂肪酸/],
+  ['mfF',   /脂質/],
+  ['mfC',   /炭水化物/],
+  ['mfSugar',/糖質/],
+  ['mf_fb', /食物繊維/],
+  ['mf_s',  /食塩相当量|食塩/],
+  ['na',    /ナトリウム/],
+  ['mf_ca', /カルシウム/],
+  ['mf_fe', /鉄/],
+  ['mf_a',  /ビタミンA/i],
+  ['mf_e',  /ビタミンE/i],
+  ['mf_b1', /ビタミンB\s*[1１₁](?![2２₂])/i],
+  ['mf_b2', /ビタミンB\s*[2２₂]/i],
+  ['mf_vc', /ビタミンC/i],
+];
+const LABEL_NAME = {mfK:'熱量',mfP:'たんぱく質',mfF:'脂質',mf_sf:'飽和脂肪酸',mfC:'炭水化物',mfSugar:'糖質',mf_fb:'食物繊維',mf_s:'食塩相当量',na:'ナトリウム',
+  mf_ca:'カルシウム',mf_fe:'鉄',mf_a:'ビタミンA',mf_e:'ビタミンE',mf_b1:'ビタミンB1',mf_b2:'ビタミンB2',mf_vc:'ビタミンC'};
+function parseLabel(text){
+  const z2h = t => t.replace(/[０-９．，]/g, c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).replace(/[ｇ]/g,'g').replace(/ｍｇ/g,'mg').replace(/ｋｃａｌ/gi,'kcal');
+  const lines = z2h(String(text||'')).split(/\r?\n/).map(l=>l.replace(/^[\s*・\-•●◆■]+/,'').trim()).filter(Boolean);
+  const labelOf = l => { for(const [id,re] of LABEL_PAT) if(re.test(l)) return id; return null; };
+  const got = {}, unsure = [], empty = [];
+  let per100 = false;
+  lines.forEach((l,i)=>{
+    if(/100\s*(g|ml)\s*(当た|あた)り/i.test(l)) per100 = true;
+    const id = labelOf(l); if(!id || got[id]!=null) return;
+    let rest = l.replace(LABEL_PAT.find(x=>x[0]===id)[1], '');
+    if(!/\d/.test(rest) && lines[i+1] && !labelOf(lines[i+1])) rest = lines[i+1];
+    if(/[〜~～]|未満|以下|以上|[<＜>＞]/.test(rest)){ unsure.push(`${LABEL_NAME[id]}「${rest.trim()}」`); return; }
+    if(/^(\s|[:：])*(tr|微量)/i.test(rest)){ got[id] = 0; return; }
+    const m = rest.replace(/,/g,'').match(/(\d+(?:\.\d+)?)\s*(kcal|mg|μg|µg|ug|g)?/i);
+    if(!m){ empty.push(LABEL_NAME[id]); return; }
+    let v = +m[1]; const u = (m[2]||'').toLowerCase();
+    if(id==='na'){ got.na = u==='g' ? v*1000 : v; return; }                      // mg で持つ
+    if(id==='mf_a' && u==='mg') v *= 1000;
+    if(['mf_ca','mf_fe','mf_e','mf_b1','mf_b2','mf_vc'].includes(id) && u==='g') v *= 1000;
+    if(['mf_ca','mf_fe','mf_e','mf_b1','mf_b2','mf_vc'].includes(id) && /μg|µg|ug/.test(u)) v /= 1000;
+    if(['mfP','mfF','mf_sf','mfC','mfSugar','mf_fb','mf_s'].includes(id) && u==='mg') v /= 1000;
+    got[id] = Math.round(v*1000)/1000;
+  });
+  // 食塩相当量が無くナトリウムだけある場合は換算（食塩相当量 g ＝ ナトリウム mg × 2.54 ÷ 1000）
+  let naNote = '';
+  if(got.mf_s==null && got.na!=null){ got.mf_s = Math.round(got.na*2.54/100)/10; naNote = `食塩相当量はナトリウム ${got.na}mg から換算しました（×2.54）。`; }
+  delete got.na;
+  return {got, unsure, empty, per100, naNote};
+}
+
 /* 栄養バランス（14項目）— 塩梅 ANBAI を統合 */
 let NUT_SUGG = [];
 function renderNutri(date){
@@ -2696,7 +2770,7 @@ function renderFood(){
   let h = `<div class="card tight">
     <div class="row" style="justify-content:space-between">
       <b style="font-size:15px">${jpDate(date)} の食事</b>
-      <span style="font-size:11.5px;color:var(--dim)">目標 ${t.kcal}kcal / P${t.protein} F${t.fat} C${t.carb}</span>
+      <span style="font-size:11.5px;color:var(--dim)">目標 ${t.kcal}kcal ・ たんぱく質${t.protein}g 脂質${t.fat}g 炭水化物${t.carb}g</span>
     </div>
   </div>`;
 
@@ -2717,19 +2791,22 @@ function renderFood(){
     </div>
     <div id="foodResults">${renderFoodResults()}</div>
     ${MYFOOD_OPEN ? `<div class="ex" style="margin-top:10px">
-      <div class="grid g3">
-        <div class="field" style="margin:0"><label>名前</label><input type="text" id="mfN" placeholder="例）式場のまかない"></div>
-        <div class="field" style="margin:0"><label>カロリー</label><input type="number" id="mfK" placeholder="kcal"></div>
-        <div class="field" style="margin:0"><label>P（g）</label><input type="number" id="mfP" placeholder="0"></div>
-        <div class="field" style="margin:0"><label>F（g）</label><input type="number" id="mfF" placeholder="0"></div>
-        <div class="field" style="margin:0"><label>C（g）</label><input type="number" id="mfC" placeholder="0"></div>
-        <div class="field" style="margin:0"><label>&nbsp;</label><button class="btn sm" id="mfSave" style="width:100%">登録</button></div>
+      <div class="field" style="margin:0 0 10px"><label>名前</label><input type="text" id="mfN" placeholder="例）式場のまかない／○○の弁当"></div>
+      <div class="field" style="margin:0 0 6px"><label>成分表示をそのまま貼り付け（任意）</label>
+        <textarea id="mfPaste" rows="4" placeholder="例）&#10;熱量 572kcal&#10;たんぱく質 23.2g&#10;脂質 17.7g&#10;炭水化物 82.8g&#10;食塩相当量 2.1g" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:var(--bg2);color:var(--txt);font-size:15px"></textarea></div>
+      <button class="btn ghost sm" id="mfParse">貼り付けた内容を読み取る</button>
+      <div id="mfMsg" class="hint"></div>
+      <div class="lbl-box">
+        <div class="lbl-head">栄養成分表示（1食あたり）</div>
+        ${MF_ROWS.map(r=>`<label class="lbl-row ${r.sub?'sub':''}"><span>${r.sub?'　':''}${r.l}</span>
+          <span class="lbl-in"><input type="number" step="any" inputmode="decimal" id="${r.id}" placeholder="${r.req?'':'不明'}"><em>${r.u}</em></span></label>`).join('')}
       </div>
-      <details style="margin-top:10px"><summary style="font-size:12.5px;color:var(--sub);cursor:pointer">塩分・ビタミン・ミネラルも入れる（任意）</summary>
-        <div class="grid g3" style="margin-top:8px">${MICRO_K.map(k=>`<div class="field" style="margin:0"><label>${NUT_L[k]}（${NUT_U[k]}）</label><input type="number" step="any" inputmode="decimal" id="mf_${k}" placeholder="不明"></div>`).join('')}</div>
-        <div class="hint">パッケージの栄養成分表示を写してください（「食塩相当量」が塩分）。空欄は「不明」として扱い、0とは数えません。</div>
+      <details style="margin-top:8px"><summary style="font-size:12.5px;color:var(--sub);cursor:pointer">カルシウム・鉄・ビタミンも入れる（表示にあれば）</summary>
+        <div class="lbl-box" style="margin-top:6px">${MF_EXTRA.map(k=>`<label class="lbl-row"><span>${NUT_L[k]}</span>
+          <span class="lbl-in"><input type="number" step="any" inputmode="decimal" id="mf_${k}" placeholder="不明"><em>${NUT_U[k]}</em></span></label>`).join('')}</div>
       </details>
-      <div class="hint">一度登録すれば次回から検索に出ます。いつものコンビニ弁当や外食を入れておくと入力が一瞬で終わります。</div>
+      <button class="btn" id="mfSave" style="width:100%;margin-top:12px">この内容で登録</button>
+      <div class="hint">パッケージの表示どおりに入れてください。空欄は「不明」として扱い、0とは数えません（熱量だけは必須）。炭水化物が無く糖質と食物繊維だけ書いてある商品は、その合計を炭水化物にします。一度登録すれば次回から検索に出ます。</div>
     </div>` : ''}`;
 
   const freq = E.freqFoods(date);
@@ -2747,11 +2824,11 @@ function renderFood(){
       if(!list.length) return;
       const st = E.mealTotals(d, s);
       body += `<div style="margin-bottom:8px">
-        <div style="font-size:11px;color:var(--dim);letter-spacing:.1em;margin:8px 0 2px">${s} — ${st.kcal}kcal（P${st.protein} F${st.fat} C${st.carb}）</div>
+        <div style="font-size:11px;color:var(--dim);letter-spacing:.1em;margin:8px 0 2px">${s} — ${st.kcal}kcal（たんぱく質${st.protein}g 脂質${st.fat}g 炭水化物${st.carb}g）</div>
         ${list.map(m=>`<div class="mi" style="padding:7px 0">
           <div class="bd">
             <b style="font-size:13.5px">${esc(m.name)}${m.q!==1?` <span style="color:var(--accent)">×${m.q}</span>`:''}</b>
-            <div class="why">${Math.round(m.k*m.q)}kcal ・ P${r1(m.p*m.q)} F${r1(m.f*m.q)} C${r1(m.c*m.q)}</div>
+            <div class="why">${Math.round(m.k*m.q)}kcal ・ たんぱく質${r1(m.p*m.q)}g 脂質${r1(m.f*m.q)}g 炭水化物${r1(m.c*m.q)}g</div>
           </div>
           <div class="row" style="gap:5px;flex-wrap:nowrap">
             <button class="btn ghost sm" data-mq="${m.id}|-">−</button>
@@ -3336,7 +3413,7 @@ function renderSettings(){
       h += `<div class="sec-title">マイ食品</div>
         ${S.myFoods.map((f,i)=>`<div class="mi" style="padding:8px 0"><div class="bd">
           <b style="font-size:13.5px">${esc(f.n)}</b>
-          <div class="why">${f.k}kcal ・ P${f.p} F${f.f} C${f.c}</div></div>
+          <div class="why">${f.k}kcal ・ たんぱく質${f.p}g 脂質${f.f}g 炭水化物${f.c}g</div></div>
           <button class="btn ghost sm" data-delfood="${i}">削除</button></div>`).join('')}`;
     }
     h += `</div>`;
@@ -3724,10 +3801,34 @@ function bind(){
         }
         toast(`直近2週間に${SLOT}の記録がありません`); break;
       }
+      case 'mfParse': {
+        const r = parseLabel($('#mfPaste').value);
+        const ids = Object.keys(r.got);
+        if(!ids.length && !r.unsure.length){ $('#mfMsg').textContent = '項目名（熱量・たんぱく質・脂質など）が見つかりませんでした。'; return; }
+        ids.forEach(id=>{ const el2 = $('#'+id); if(el2) el2.value = r.got[id]; });
+        if(MF_EXTRA.some(k=>r.got['mf_'+k]!=null)){ const dt = $('#mfPaste').closest('.ex').querySelector('details'); if(dt) dt.open = true; }
+        const unitOf = id => id==='mfK' ? 'kcal' : id.startsWith('mf_') && NUT_U[id.slice(3)] ? NUT_U[id.slice(3)] : 'g';
+        const msg = [`読み取り：${ids.map(id=>LABEL_NAME[id]+' '+r.got[id]+unitOf(id)).join('・')}`];
+        if(r.naNote) msg.push(r.naNote);
+        if(r.empty.length) msg.push(`値が書かれていない項目：${r.empty.join('・')}（空欄＝不明のままにしています）`);
+        if(r.unsure.length) msg.push(`要確認（入れていません）：${r.unsure.join('・')}。表示を見て手で入れてください`);
+        if(r.per100) msg.push('⚠ 「100gあたり」の表示のようです。1食の量と違う場合は、食べた量に合わせて追加時の量（×0.5など）で調整してください');
+        msg.push('下の欄で数値を確かめてから「この内容で登録」を押してください。');
+        $('#mfMsg').innerHTML = msg.map(esc).join('<br>');
+        $('#mfMsg').style.color = (r.unsure.length||r.per100||r.empty.length) ? 'var(--warn)' : 'var(--sub)';
+        break;
+      }
       case 'mfSave': {
         const n = ($('#mfN').value||'').trim();
-        const k = num($('#mfK').value), pp = num($('#mfP').value), ff = num($('#mfF').value), cc = num($('#mfC').value);
-        if(!n || k==null){ toast('名前とカロリーは必須です'); return; }
+        const k = num($('#mfK').value), pp = num($('#mfP').value), ff = num($('#mfF').value);
+        let cc = num($('#mfC').value);
+        const sugar = num($('#mfSugar').value), fbv = num($('#mf_fb').value);
+        if(!n){ toast('名前を入れてください'); return; }
+        if(k==null){ toast('熱量（kcal）は必須です'); return; }
+        if(cc==null && sugar!=null){
+          if(fbv!=null) cc = Math.round((sugar+fbv)*10)/10;
+          else { cc = sugar; toast('食物繊維が分からないので、糖質の値を炭水化物として登録しました'); }
+        }
         const mm = MICRO_K.map(x=>{ const el2 = $('#mf_'+x); return el2 ? num(el2.value) : null; });
         S.myFoods.unshift(Object.assign({n, k, p:pp||0, f:ff||0, c:cc||0, g:'マイ食品', r:kana(n), my:1},
           mm.some(v=>v!=null) ? {m:mm} : {}));
