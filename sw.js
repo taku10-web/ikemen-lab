@@ -1,7 +1,7 @@
 /* IKEMEN LAB — Service Worker
    オフラインで起動できるように、アプリ本体をキャッシュする。
    index.html を更新したら CACHE の版数を上げること（古いキャッシュが破棄される）。 */
-const CACHE = 'ikemenlab-v6';   /* v6: マイ食品を栄養成分表示の並びで登録・貼り付け読み取り */
+const CACHE = 'ikemenlab-v7';   /* v7: 睡眠を時刻で入力・歩数をトレーニングへ・スキンケアと身だしなみを削除 */
 const ASSETS = [
   './',
   './index.html',

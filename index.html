@@ -755,26 +755,6 @@ const SHIFTS = [
   {k:'allnight', l:'徹夜',  load:3}
 ];
 
-const SKIN_ITEMS = [
-  {k:'amWash',   l:'朝 洗顔'},
-  {k:'amMoist',  l:'朝 保湿'},
-  {k:'sunscreen',l:'日焼け止め'},
-  {k:'pmWash',   l:'夜 洗顔'},
-  {k:'pmMoist',  l:'夜 保湿'},
-  {k:'serum',    l:'美容液/レチノール'}
-];
-const GROOM_ITEMS = [
-  {k:'shave',   l:'髭・体毛'},
-  {k:'brows',   l:'眉'},
-  {k:'hair',    l:'髪セット'},
-  {k:'scalp',   l:'頭皮ケア'},
-  {k:'teeth',   l:'歯磨き2回'},
-  {k:'floss',   l:'フロス/ホワイトニング'},
-  {k:'nails',   l:'爪'},
-  {k:'posture', l:'姿勢を意識'},
-  {k:'stretch', l:'ストレッチ'}
-];
-
 const DEFAULT_STATE = {
   profile:{
     name:'', sex:'male', birthYear:1995, height:172,
@@ -787,7 +767,6 @@ const DEFAULT_STATE = {
     mode:'build',             // build（伸ばす） / maintain（維持＝繁忙期）
     offDays:[2,3],            // 定休日の曜日（0=日 … 6=土）
     extraPerWeek:1,           // 勤務日にこなせる20分の補填セッション数／週
-    sunPolicy:'outdoor',      // 日焼け止めの評価：outdoor=屋外に出た日のみ / daily=毎日 / off=評価しない
     weighFreq:'weekly',       // 体重の測定頻度：daily=毎朝 / weekly=週1回
     weighDay:2,               // 週1回のときの測定曜日（0=日 … 6=土）
     calCycle:true,            // その日の活動量（立ち時間・歩数・トレーニング）でカロリーを増減させる
@@ -831,17 +810,13 @@ let VIEW_DATE = ymd(new Date());
 let TAB = 'home';
 
 function blankDay(date){
-  const skin={}, groom={};
-  SKIN_ITEMS.forEach(i=>skin[i.k]=false);
-  GROOM_ITEMS.forEach(i=>groom[i.k]=false);
   const off = S && S.profile && (S.profile.offDays||[]).includes(parseYmd(date).getDay());
   return {
-    date, shift: off?'off':null, workStart:'', workEnd:'', homeTime:'', meals:[], outdoor:false,
+    date, shift: off?'off':null, workStart:'', workEnd:'', homeTime:'', meals:[],
     weight:null, bodyFat:null, waist:null,
     bmrScale:null, visceral:null, muscleRate:null,   // 体重計が出す値（基礎代謝・内臓脂肪レベル・骨格筋率）
     kcal:null, protein:null, fat:null, carb:null, water:null, alcohol:null,
-    sleepH:null, sleepQ:null, steps:null,
-    skin, skinCond:null, groom,
+    sleepH:null, sleepStart:'', sleepEnd:'', sleepQ:null, steps:null,   // 睡眠はその日の朝に起きた分（前夜の就寝〜今朝の起床）
     mood:null, stress:null, note:''
   };
 }
@@ -1645,27 +1620,9 @@ E.calBalance7 = (date)=>{
   return {intake: Math.round(intake), target: Math.round(target), diff: Math.round(intake-target), days: rows.length};
 };
 
-/* 日焼け止めの評価対象を決める
-   outdoor: 屋外に出た日だけを対象にする（既定。屋内勤務で不当に減点しないため）
-   daily  : 毎日を対象にする
-   off    : 評価しない                                      */
-E.sunStats = (date)=>{
-  const policy = S.profile.sunPolicy || 'outdoor';
-  const rows = daysUpTo(date, 14);
-  if(policy==='off') return {applies:false, policy, rate:null, n:0, ok:0, outdoorDays:rows.filter(x=>x.outdoor).length};
-  const targets = policy==='daily' ? rows : rows.filter(x=>x.outdoor);
-  const ok = targets.filter(x=>x.skin && x.skin.sunscreen).length;
-  return {
-    applies: targets.length > 0,
-    policy, n: targets.length, ok,
-    rate: targets.length ? ok/targets.length : null,
-    outdoorDays: rows.filter(x=>x.outdoor).length
-  };
-};
-
 E.streak = (date)=>{
   let n=0, d=date;
-  while(S.days[d] && (S.days[d].weight || S.days[d].kcal || S.days[d].skinCond)){ n++; d = addDays(d,-1); }
+  while(S.days[d] && (S.days[d].weight || S.days[d].kcal || S.days[d].sleepH)){ n++; d = addDays(d,-1); }
   return n;
 };
 
@@ -1705,22 +1662,7 @@ E.score = (date)=>{
   parts.push({k:'筋トレ', v: clamp(volPts,0,25), max:25, color:'var(--good)',
     note:`直近14日 ${rv.total}セット / ${rv.sessions}回` + (S.profile.mode==='maintain'?'（維持モード基準）':'')});
 
-  // ③ 肌 20点（日焼け止めは「屋外に出た日」だけを対象にする＝屋内勤務で不当に減点しない）
-  const sun = E.sunStats(date);
-  const careRate = E.rate(date, 14, d=>d.skin && d.skin.pmMoist && d.skin.pmWash);
-  const cond     = E.avg(date, 14, 'skinCond');
-  // 対象日がなければ、その配点を夜のケアと肌の状態に振り替える
-  const wSun = sun.applies ? 8 : 0, wCare = sun.applies ? 7 : 12, wCond = sun.applies ? 5 : 8;
-  let skin = 0;
-  if(sun.rate!=null) skin += sun.rate*wSun;
-  if(careRate)       skin += careRate.rate*wCare;
-  if(cond)           skin += (cond/5)*wCond; else skin += wCond*0.5;
-  parts.push({k:'肌', v: clamp(skin,0,20), max:20, color:'var(--core)',
-    note: sun.applies
-      ? `日焼け止め ${Math.round(sun.rate*100)}%（屋外の日 ${sun.n}日）・ 夜ケア ${careRate?Math.round(careRate.rate*100):0}%`
-      : `夜ケア ${careRate?Math.round(careRate.rate*100):0}%（屋外の日がないため日焼け止めは評価対象外）`});
-
-  // ④ 生活習慣 15点
+  // ③ 生活習慣 15点
   const sleepAvg = E.avg(date, 7, 'sleepH');
   const stepAvg  = E.avg(date, 7, 'steps');
   const waterAvg = E.avg(date, 7, 'water');
@@ -1733,18 +1675,9 @@ E.score = (date)=>{
   parts.push({k:'生活習慣', v: clamp(life,0,15), max:15, color:'var(--warn)',
     note: sleepAvg ? `睡眠 ${r1(sleepAvg)}h ・ ${stepAvg?Math.round(stepAvg).toLocaleString()+'歩':'歩数なし'}` : '記録なし'});
 
-  // ⑤ グルーミング 10点
-  const gr = E.rate(date, 14, d=>{
-    if(!d.groom) return false;
-    return GROOM_ITEMS.filter(g=>d.groom[g.k]).length >= 4;
-  });
-  const posture = E.rate(date, 14, d=>d.groom && d.groom.posture);
-  let groom = 0;
-  if(gr) groom += gr.rate*6;
-  if(posture) groom += posture.rate*4;
-  parts.push({k:'身だしなみ', v: clamp(groom,0,10), max:10, color:'var(--arm)',
-    note: gr ? `直近14日で ${gr.ok}/${gr.n}日 実施` : '記録なし'});
-
+  // 肌・身だしなみは別アプリで管理するため外した。残り3項目（30/25/15点）の比率を保ったまま100点に換算する
+  const MAX_NEW = {'体組成':43, '筋トレ':36, '生活習慣':21};
+  parts.forEach(x=>{ const m = MAX_NEW[x.k]; if(m){ x.v = x.v*m/x.max; x.max = m; } });
   const total = parts.reduce((a,b)=>a+b.v, 0);
   return {total: Math.round(total), parts};
 };
@@ -1773,7 +1706,7 @@ E.advice = (date)=>{
   if(logged < 3){
     push({pri:0, level:'info', ico:'🧭', src:'ONBOARDING',
       title:'まずは3日ぶん記録を埋めてください',
-      body:'体重・食事・睡眠・スキンケアが3日たまると、体重トレンドと実測ベースの消費カロリー推定が動き始めます。それまでのアドバイスは一般論ベースです。',
+      body:'体重・食事・睡眠が3日たまると、体重トレンドと実測ベースの消費カロリー推定が動き始めます。それまでのアドバイスは一般論ベースです。',
       act:'「記録」タブ → 今日の分を入力'});
   }
 
@@ -1887,47 +1820,6 @@ E.advice = (date)=>{
       title:`飲酒が14日中 ${alc.ok}日`,
       body:'飲酒は筋タンパク合成を一時的に大きく落とし、深い睡眠を削り、翌日のむくみ（顔）と肌の乾燥を招きます。カロリーそのものより回復への影響が問題です。',
       act:'週2日以内に。飲む日はトレーニングの翌日ではなくオフ日の前夜へ寄せる'});
-  }
-
-  /* --- スキンケア --- */
-  const sun = E.sunStats(date);
-  if(sun.applies && sun.rate < 0.7){
-    push({pri:3, level:'warn', ico:'☀️', src:'DERMATOLOGY',
-      title:`屋外に出た${sun.n}日のうち、日焼け止めは${sun.ok}日だけ`,
-      body: sun.policy==='daily'
-        ? '毎日評価の設定になっています。屋内中心の生活なら、設定で「屋外に出た日のみ」に変えたほうが実態に合います。'
-        : 'ガーデン挙式・前撮り・送賓など、外に立つ日は紫外線量が屋内の比ではありません。シワ・たるみ・シミの主因は蓄積した紫外線なので、屋外に出る日だけ押さえれば費用対効果はとても高くなります。',
-      act:'屋外に出る予定の日だけ、朝にSPF30以上を顔と首・耳の後ろへ。ロッカーに1本置いておくと確実です'});
-  }else if(sun.applies && sun.rate >= 0.85){
-    push({pri:9, level:'good', ico:'🛡️', src:'DERMATOLOGY',
-      title:'屋外に出た日はきちんと塗れています',
-      body:'必要な日だけ押さえるのが最も合理的なやり方です。過不足ありません。',
-      act:'維持。長時間の屋外対応がある日は昼に塗り直しを'});
-  }else if(sun.policy==='outdoor' && sun.outdoorDays===0 && daysUpTo(date,14).length >= 7){
-    push({pri:10, level:'good', ico:'🏢', src:'DERMATOLOGY',
-      title:'直近2週間は屋外に出た日がないので、日焼け止めは不要です',
-      body:'屋内は照明もPC画面もUVはほぼゼロで、窓から離れていれば影響はありません。車移動も1回5分程度なら誤差の範囲です。あなたの肌で優先すべきは、紫外線ではなく睡眠と夜の保湿です。',
-      act:'屋外に出る日（ガーデン挙式・前撮り・休みの外出）だけ記録タブで「屋外に出た」をチェック'});
-  }
-  const night = E.rate(date, 14, x=>x.skin && x.skin.pmWash && x.skin.pmMoist);
-  if(night && night.rate < 0.6){
-    push({pri:4, level:'warn', ico:'🧴', src:'DERMATOLOGY',
-      title:'夜の洗顔＋保湿が抜けがちです',
-      body:'皮脂と汚れを落としきらないまま寝ると毛穴の詰まりと炎症が起き、赤み・ニキビ跡として残ります。保湿を飛ばすと乾燥で皮脂が過剰に出る悪循環に入ります。',
-      act:'「洗顔→化粧水→乳液（またはクリーム）」の3手だけ固定。3分で終わります'});
-  }
-  // 肌コンディションと睡眠・飲酒の関係
-  const condRows = daysUpTo(date, 21).filter(x=>x.skinCond);
-  if(condRows.length >= 8){
-    const lo = condRows.filter(x=>x.skinCond<=2), hi = condRows.filter(x=>x.skinCond>=4);
-    const avgS = arr => { const v=arr.filter(x=>x.sleepH); return v.length? v.reduce((a,b)=>a+b.sleepH,0)/v.length : null; };
-    const ls = avgS(lo), hs = avgS(hi);
-    if(ls && hs && hs - ls >= 0.7){
-      push({pri:3, level:'info', ico:'🔎', src:'YOUR OWN DATA',
-        title:'あなたのデータ上、肌の調子は睡眠と連動しています',
-        body:`肌が良い日の睡眠は平均 ${r1(hs)}h、悪い日は ${r1(ls)}h。一般論ではなく、あなた自身の21日分の記録から出た相関です。`,
-        act:`睡眠 ${r1(hs)}h を下限ラインとして扱う`});
-    }
   }
 
   /* --- シフト前提のコンディション --- */
@@ -2055,22 +1947,6 @@ E.advice = (date)=>{
         body:'輪郭・腹筋が出る水準です。ここから先は絞るより「乗せる」ほうがリターンが大きくなります。',
         act:'設定の目標タイプを「リコンプ」か「増量」に切り替えて、肩と背中を厚くする局面へ'});
     }
-  }
-
-  /* --- 身だしなみ --- */
-  const gr = E.rate(date, 14, x=>x.groom && GROOM_ITEMS.filter(g=>x.groom[g.k]).length>=4);
-  if(gr && gr.rate < 0.5){
-    push({pri:5, level:'info', ico:'✂️', src:'GROOMING',
-      title:'身だしなみの手入れが不定期です',
-      body:'眉・髪・歯・爪・体毛は、体づくりより短期間で印象が変わる領域です。特に眉と歯は初対面での清潔感の判定にほぼ直結します。',
-      act:'眉は2週に1回、美容室は4〜6週に1回を固定スケジュール化する'});
-  }
-  const posture = E.rate(date, 14, x=>x.groom && x.groom.posture);
-  if(posture && posture.rate < 0.4){
-    push({pri:6, level:'info', ico:'🪞', src:'POSTURE',
-      title:'姿勢を意識できている日が少ないです',
-      body:'胸を張って顎を引くだけで、身長は数cm高く、体は引き締まって見えます。今日から無料でできる唯一の即効性のある改善です。',
-      act:'スマホを目線の高さへ。1時間ごとに肩甲骨を寄せる10秒を挟む'});
   }
 
   /* --- 記録の抜け --- */
@@ -2305,11 +2181,11 @@ const ADV_CAT = {
   'VOLUME (14日)':'トレーニング', 'PROGRESSION':'トレーニング', 'PROGRAMMING':'トレーニング',
   'POSTURE':'トレーニング', 'AUTOREGULATION':'トレーニング', 'MODE':'トレーニング',
   'RECOVERY':'休養・生活', 'SHIFT':'休養・生活', 'SKIN / PERFORMANCE':'休養・生活', 'RECOVERY / SKIN':'休養・生活',
-  'DERMATOLOGY':'肌・見た目', 'AESTHETICS':'肌・見た目', 'GROOMING':'肌・見た目', 'YOUR OWN DATA':'肌・見た目',
+  'AESTHETICS':'見た目',
   'TRACKING':'記録の習慣', 'HABIT':'記録の習慣', 'DATA':'記録の習慣', 'ONBOARDING':'記録の習慣'
 };
-const CAT_ORDER = ['食事・体重','トレーニング','休養・生活','肌・見た目','記録の習慣'];
-const CAT_ICON  = {'食事・体重':'🍽','トレーニング':'🏋️','休養・生活':'😴','肌・見た目':'✨','記録の習慣':'📋'};
+const CAT_ORDER = ['食事・体重','トレーニング','休養・生活','見た目','記録の習慣'];
+const CAT_ICON  = {'食事・体重':'🍽','トレーニング':'🏋️','休養・生活':'😴','見た目':'✨','記録の習慣':'📋'};
 
 function advCard(a){
   return `<div class="adv ${a.level}">
@@ -2437,7 +2313,7 @@ function renderHome(){
   // 今日の記録状況
   const filled = [];
   if(d.weight) filled.push('体重'); if(d.kcal||d.protein) filled.push('食事');
-  if(d.sleepH) filled.push('睡眠'); if(d.skinCond||Object.values(d.skin).some(Boolean)) filled.push('スキンケア');
+  if(d.sleepH) filled.push('睡眠');
   if(S.workouts.some(x=>x.date===date)) filled.push('トレーニング');
   h += `<div class="card tight">
     <div class="row" style="justify-content:space-between">
@@ -2464,6 +2340,17 @@ function avgOrRaw(date){
 /* ---------------------------------------------------------------
    8. ビュー：記録
    --------------------------------------------------------------- */
+// 就寝〜起床の時刻から睡眠時間を出す（日付をまたぐ場合は24時間足す）
+function sleepHours(st, en){
+  if(!st || !en) return null;
+  let m = toMin(en) - toMin(st); if(m <= 0) m += 1440;
+  return Math.round(m/60*100)/100;
+}
+function sleepCalcText(d, t){
+  if(d.sleepStart && d.sleepEnd) return `睡眠 <b>${r1(d.sleepH)}時間</b>（目標 ${t.sleep}時間）`;
+  if(d.sleepH && !d.sleepStart && !d.sleepEnd) return `この日は時刻なしで ${r1(d.sleepH)}時間 と記録されています。`;
+  return '寝た時刻と起きた時刻を入れると、睡眠時間を自動で計算します（今朝起きた分をこの日の睡眠として記録）。';
+}
 function numField(k, label, unit, step, val, ph){
   return `<div class="field"><label>${label}</label><div class="unit">
     <input type="number" inputmode="decimal" step="${step||'any'}" data-k="${k}" value="${val==null?'':val}" placeholder="${ph||''}">
@@ -2887,7 +2774,7 @@ function renderFood(){
 }
 
 /* ---------------------------------------------------------------
-   8c. ビュー：からだ（勤務・体組成・睡眠・肌・身だしなみ・写真）
+   8c. ビュー：からだ（勤務・体組成・睡眠・写真）
    --------------------------------------------------------------- */
 function renderLog(){
   const date = VIEW_DATE, d = day(date), t = E.targets(date);
@@ -2908,12 +2795,9 @@ function renderLog(){
     <div class="grid g3" style="margin-top:14px">
       <div class="field"><label>出勤</label><input type="time" data-k="workStart" value="${esc(d.workStart||'')}"></div>
       <div class="field"><label>退勤</label><input type="time" data-k="workEnd" value="${esc(d.workEnd||d.homeTime||'')}"></div>
-      <div class="field"><label>屋外</label>
-        <div class="chip ${d.outdoor?'on pos':''}" data-outdoor="1" style="display:block;text-align:center;padding:10px">${d.outdoor?'✓ 出た':'屋外に出た'}</div>
-      </div>
     </div>
     ${(()=>{ const a = E.activity(date); return a.standH ? `<div class="hint" style="color:var(--sub)">立ち時間 <b>${r1(a.standH)}h</b>（${a.assumed?`勤務時間が未入力のため ${a.workH}h と仮定`:`勤務 ${r1(a.workH)}h（休憩1h除く）`} × 立っている割合 ${Math.round(a.ratio*100)}%）。食事の目標と、脚のトレーニング量に反映します。</div>` : ''; })()}
-    <div class="hint">退勤時刻を入れておくと、翌日のメニューが自動で軽くなります。勤務区分は摂取カロリーの日別調整にも使われます。屋外は30分以上外にいた日だけチェックしてください（日焼け止めの評価対象になります）。</div>`, true);
+    <div class="hint">退勤時刻を入れておくと、翌日のメニューが自動で軽くなります。勤務区分は摂取カロリーの日別調整にも使われます。</div>`, true);
 
   /* 体組成 */
   const bmi = E.bmi(date, d.weight);
@@ -2938,29 +2822,13 @@ function renderLog(){
     ${E.isWeekly()?`<div class="hint">測定は週1回で十分です。次の測定日は ${jpDate(E.nextWeighDay(date))}。</div>`:''}`, true);
 
   /* 睡眠 */
-  h += sect('b-sleep', '睡眠・活動', d.sleepH?`${r1(d.sleepH)}h`:'', `
-    <div class="grid g3">
-      ${numField('sleepH','睡眠時間','時間','0.25',d.sleepH, String(t.sleep))}
-      ${numField('steps','歩数','歩','100',d.steps, String(t.steps))}
-      <div></div>
+  h += sect('b-sleep', '睡眠', d.sleepH?`${r1(d.sleepH)}h`:'', `
+    <div class="grid g2">
+      <div class="field"><label>昨夜 寝た時刻</label><input type="time" data-k="sleepStart" value="${esc(d.sleepStart||'')}"></div>
+      <div class="field"><label>今朝 起きた時刻</label><input type="time" data-k="sleepEnd" value="${esc(d.sleepEnd||'')}"></div>
     </div>
+    <div class="hint" id="sleepCalc">${sleepCalcText(d, t)}</div>
     ${scaleField('sleepQ','睡眠の質', d.sleepQ, ['最悪','悪い','普通','良い','最高'])}`, true);
-
-  /* スキンケア */
-  const skinDone = SKIN_ITEMS.filter(i=>d.skin[i.k]).length;
-  h += sect('b-skin', 'スキンケア', `${skinDone}/${SKIN_ITEMS.length}`, `
-    <div class="chips">
-      ${SKIN_ITEMS.map(i=>`<div class="chip ${d.skin[i.k]?'on pos':''}" data-skin="${i.k}">${d.skin[i.k]?'✓ ':''}${i.l}</div>`).join('')}
-    </div>
-    ${S.profile.sunPolicy==='outdoor' && !d.outdoor ? `<div class="hint">今日は屋外に出ていない記録なので、日焼け止めは未実施でも減点されません。</div>`:''}
-    <div style="margin-top:14px">${scaleField('skinCond','今日の肌のコンディション', d.skinCond, ['荒れ','いまいち','普通','良い','絶好調'])}</div>`, true);
-
-  /* 身だしなみ */
-  const groomDone = GROOM_ITEMS.filter(i=>d.groom[i.k]).length;
-  h += sect('b-groom', '身だしなみ・姿勢', `${groomDone}/${GROOM_ITEMS.length}`, `
-    <div class="chips">
-      ${GROOM_ITEMS.map(i=>`<div class="chip ${d.groom[i.k]?'on pos':''}" data-groom="${i.k}">${d.groom[i.k]?'✓ ':''}${i.l}</div>`).join('')}
-    </div>`, false);
 
   /* コンディション */
   h += sect('b-cond', 'コンディション・メモ', '', `
@@ -3043,6 +2911,20 @@ function renderTrain(){
 
   /* --- 今日のメニュー提案（ホームから移設） --- */
   h += renderSuggestion(date);
+
+  /* --- 歩数・ふだんの活動（筋トレ以外の消費。食事の目標と脚の疲れの判定に使う） --- */
+  {
+    const d = day(date), t = E.targets(date), a = E.activity(date);
+    h += `<div class="card">
+      <h3>${jpDate(date)} の歩数・活動</h3>
+      <div class="grid g2" style="margin-top:8px">
+        ${numField('steps','歩数','歩','100',d.steps, String(t.steps))}
+        <div class="field"><label>&nbsp;</label><button class="btn ghost sm" id="actRefresh" style="width:100%">反映する</button></div>
+      </div>
+      <div class="hint">${a.parts.length ? '今日の活動：'+a.parts.map(x=>`${esc(x.l)} +${x.kcal}kcal`).join(' ／ ') : 'まだ活動の記録がありません'}${a.note?'。'+esc(a.note):''}</div>
+      <div class="hint">歩数はスマホのヘルスケアアプリの値をそのまま入れてください。仕事中の歩きも含めた1日の合計でOKです。歩数がある日は、下のウォーキングの記録と二重には数えません。</div>
+    </div>`;
+  }
 
   /* --- 入力中のワークアウト --- */
   h += `<div class="card">
@@ -3195,10 +3077,8 @@ function agg(from, to){
     weight: ws.length? ws[ws.length-1].ma : null,
     weightStart: ws.length? ws[0].ma : null,
     kcal: mean('kcal'), protein: mean('protein'), fat: mean('fat'), carb: mean('carb'),
-    water: mean('water'), sleep: mean('sleepH'), steps: mean('steps'), skinCond: mean('skinCond'),
+    water: mean('water'), sleep: mean('sleepH'), steps: mean('steps'),
     alcoholDays: rows.filter(r=>(r.alcohol||0)>0).length,
-    outdoorDays: rows.filter(r=>r.outdoor).length,
-    sunDays: rows.filter(r=>r.outdoor && r.skin && r.skin.sunscreen).length,
     sets: cs.total, sessions: cs.sessions, tonnage: cs.tonnage
   };
 }
@@ -3239,8 +3119,6 @@ function renderAnalysis(){
       ${cmpRow('水分', A.water, B.water, 'ml', 0, false)}
       ${cmpRow('総セット数', A.sets, B.sets, 'set', 0, false)}
       ${cmpRow('総挙上重量', A.tonnage/1000, B.tonnage/1000, 't', 1, false)}
-      ${cmpRow('肌コンディション', A.skinCond, B.skinCond, '/5', 1, false)}
-      ${cmpRow('屋外に出た日', A.outdoorDays, B.outdoorDays, '日', 0, false)}
       ${cmpRow('うち日焼け止め', A.sunDays, B.sunDays, '日', 0, false)}
       ${cmpRow('飲酒', A.alcoholDays, B.alcoholDays, '日', 0, true)}
     </table></div>
@@ -3363,10 +3241,6 @@ function renderSettings(){
         <option value="daily"  ${p.weighFreq==='daily'?'selected':''}>毎朝</option></select></div>
       <div class="field"><label>測定する曜日</label><select data-p="weighDay">
         ${['日','月','火','水','木','金','土'].map((n,i)=>`<option value="${i}" ${(+p.weighDay)===i?'selected':''}>${n}曜日</option>`).join('')}</select></div>
-      <div class="field"><label>日焼け止めの評価</label><select data-p="sunPolicy">
-        <option value="outdoor" ${p.sunPolicy==='outdoor'?'selected':''}>屋外に出た日だけ評価する</option>
-        <option value="daily"   ${p.sunPolicy==='daily'?'selected':''}>毎日評価する</option>
-        <option value="off"     ${p.sunPolicy==='off'?'selected':''}>評価しない</option></select></div>
       <div class="field"><label>勤務日の補填トレ（20分）</label><div class="unit"><input type="number" step="1" min="0" max="5" data-p="extraPerWeek" value="${p.extraPerWeek}"><span>回/週</span></div></div>
       <div class="field"><label>カロリーの日別調整</label><select data-p="calCycle">
         <option value="1" ${p.calCycle?'selected':''}>する（立ち時間・歩数・トレーニングから増減）</option>
@@ -3457,7 +3331,7 @@ function renderSettings(){
 
   h += `<div class="card"><h3>このアプリについて</h3>
     <p style="font-size:12.5px;color:var(--sub);line-height:1.9;margin:0">
-    体重・食事・トレーニング・スキンケア・身だしなみを1つのダッシュボードにまとめ、記録から自動でアドバイスを出します。
+    体重・食事・トレーニング・睡眠を1つのダッシュボードにまとめ、記録から自動でアドバイスを出します。
     参考にした考え方：食事とスコア化は「あすけん」「MyFitnessPal」、トレーニングのログと推定1RM・週間ボリュームは「Hevy」「Strong」、
     次回重量の提案は「Fitbod」、体重の移動平均表示は「Withings」、肌の記録は「TroveSkin」、習慣の連続日数は「Streaks」。<br><br>
     食品データ（${FOODS.length}品目）は日本食品標準成分表と一般的な市販品をもとにした<b>1食分の概算値</b>です。商品ごとの差があるので、正確に管理したい常食は「自分の食品を登録」でパッケージ表示の数値を入れてください。<br><br>
@@ -3517,14 +3391,19 @@ function bind(){
     const k = el.dataset.k;
     if(k){
       const d = day(VIEW_DATE, true);
-      d[k] = (k==='note'||k==='homeTime'||k==='workStart'||k==='workEnd') ? el.value : num(el.value);
+      d[k] = (k==='note'||k==='homeTime'||k==='workStart'||k==='workEnd'||k==='sleepStart'||k==='sleepEnd') ? el.value : num(el.value);
+      if(k==='sleepStart'||k==='sleepEnd'){
+        const h2 = sleepHours(d.sleepStart, d.sleepEnd);
+        if(h2!=null) d.sleepH = h2;
+        const box = $('#sleepCalc'); if(box) box.innerHTML = sleepCalcText(d, E.targets(VIEW_DATE));
+      }
       save(); return;
     }
     // プロフィール
     const pk = el.dataset.p;
     if(pk){
       const v = el.value;
-      const strKeys = ['name','goalDate','sex','goalType','equipment','mode','sunPolicy','weighFreq'];
+      const strKeys = ['name','goalDate','sex','goalType','equipment','mode','weighFreq'];
       if(strKeys.includes(pk))      S.profile[pk] = v;
       else if(pk==='calCycle')      S.profile[pk] = (v==='1');
       else                          S.profile[pk] = num(v) ?? S.profile[pk];
@@ -3585,7 +3464,7 @@ function bind(){
 
   /* ---- クリック ---- */
   document.addEventListener('click', e=>{
-    const el = e.target.closest('[data-skin],[data-groom],[data-shift],[data-off],[data-min],[data-food],[data-quick],[data-slot],[data-fq],[data-nsugg],[data-mq],[data-mdel],[data-deltmpl],[data-delfood],[data-fill],[data-loadmin],[data-tmin],[data-outdoor],[data-hint],[data-sect],[data-photo],[data-delphoto],[data-check],[data-rep],[data-alldone],[data-scale] button,[data-addset],[data-delset],[data-delex],[data-editw],[data-delw],button');
+    const el = e.target.closest('[data-shift],[data-off],[data-min],[data-food],[data-quick],[data-slot],[data-fq],[data-nsugg],[data-mq],[data-mdel],[data-deltmpl],[data-delfood],[data-fill],[data-loadmin],[data-tmin],[data-outdoor],[data-hint],[data-sect],[data-photo],[data-delphoto],[data-check],[data-rep],[data-alldone],[data-scale] button,[data-addset],[data-delset],[data-delex],[data-editw],[data-delw],button');
     if(!el) return;
 
     /* ---- 食事 ---- */
@@ -3661,12 +3540,6 @@ function bind(){
       HINT_OPEN[n] = !HINT_OPEN[n];
       render(true); return;
     }
-    // 屋外に出た日
-    if(el.dataset.outdoor){
-      const d = day(VIEW_DATE, true);
-      d.outdoor = !d.outdoor;
-      save(); render(true); return;
-    }
     // 勤務区分
     if(el.dataset.shift){
       const d = day(VIEW_DATE, true);
@@ -3685,19 +3558,6 @@ function bind(){
     // 持ち時間の選択
     if(el.dataset.min){ SESSION_MIN = +el.dataset.min; render(true); return; }
 
-    // スキンケア／身だしなみのチップ
-    const sk = el.dataset.skin, gk = el.dataset.groom;
-    if(sk || gk){
-      const d = day(VIEW_DATE, true);
-      const bag = sk ? d.skin : d.groom;
-      const key = sk || gk;
-      bag[key] = !bag[key];
-      save();
-      const label = (sk? SKIN_ITEMS : GROOM_ITEMS).find(x=>x.k===key).l;
-      el.classList.toggle('on', bag[key]); el.classList.toggle('pos', bag[key]);
-      el.textContent = (bag[key]?'✓ ':'') + label;
-      return;
-    }
     // 5段階スケール
     const holder = el.parentElement && el.parentElement.dataset && el.parentElement.dataset.scale;
     if(holder){
@@ -3788,6 +3648,7 @@ function bind(){
         INSTALL_PROMPT.userChoice.finally(()=>{ INSTALL_PROMPT = null; render(true); });
         break;
       }
+      case 'actRefresh': render(true); toast('食事の目標と脚の疲れの判定に反映しました'); break;
       case 'myFoodToggle': MYFOOD_OPEN = !MYFOOD_OPEN; render(true); break;
       case 'copySlot': {
         for(let i=1;i<=14;i++){
@@ -3933,7 +3794,7 @@ function makeDemo(){
   S.meta.created = addDays(ymd(new Date()), -49);
   S.profile = Object.assign(S.profile, {name:'', height:172, birthYear:1995, goalType:'cut', goalWeight:66, goalBf:12,
     activity:1.5, equipment:'home', mode:'build', offDays:[2,3], calCycle:true,
-    weighFreq:'weekly', weighDay:2, sunPolicy:'outdoor'});
+    weighFreq:'weekly', weighDay:2});
 
   const today = ymd(new Date());
   const rnd = (a,b)=> a + Math.random()*(b-a);
@@ -3976,15 +3837,6 @@ function makeDemo(){
     d.sleepQ  = clamp(Math.round(d.sleepH-3), 1, 5);
     d.steps   = Math.round((d.shift==='wedding' ? rnd(12000,18000) : off ? rnd(3500,8000) : rnd(6000,11000))/100)*100;
     // 屋外に出るのはガーデン挙式・前撮り対応と、休みの外出のとき
-    d.outdoor = (d.shift==='wedding' && Math.random()<0.35) || (off && Math.random()<0.3);
-    d.skin.amWash = true;
-    d.skin.amMoist = Math.random()<0.85;
-    d.skin.sunscreen = d.outdoor ? Math.random()<0.6 : Math.random()<0.15;
-    d.skin.pmWash = Math.random()<0.9;
-    d.skin.pmMoist = Math.random()<0.7;
-    d.skin.serum = Math.random()<0.3;
-    d.skinCond = clamp(Math.round((d.sleepH-4)*1.1 - (d.alcohol?1:0) + rnd(0,1.2)), 1, 5);
-    GROOM_ITEMS.forEach(g=> d.groom[g.k] = Math.random() < (g.k==='teeth'?0.95: g.k==='posture'?0.4:0.5));
     d.mood = clamp(Math.round(rnd(2.5,5)),1,5);
     d.stress = clamp(Math.round(rnd(1,4)),1,5);
     S.days[date] = d;

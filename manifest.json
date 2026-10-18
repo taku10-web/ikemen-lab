@@ -1,7 +1,7 @@
 {
   "name": "IKEMEN LAB",
   "short_name": "IKEMEN LAB",
-  "description": "体重・食事・筋トレ・スキンケアを一元管理して、記録から自動でコーチングを出すアプリ",
+  "description": "体重・食事・筋トレ・睡眠を一元管理して、記録から自動でコーチングを出すアプリ",
   "lang": "ja",
   "start_url": "./index.html",
   "scope": "./",
